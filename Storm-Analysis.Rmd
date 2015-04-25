@@ -1,0 +1,208 @@
+---
+output:
+  html_document:
+    keep_md: yes
+---
+STORM EVENTS ANALYSIS IN THE U.S. BETWEEN 1950 AND 2011
+===============================================================================
+author: "Sabank"
+date: "April 23, 2015"
+
+Synopsis:
+The basic goal of this assignment is to explore the National Oceanic and
+Atmospheric Administration's (NOAA)Storm Database and answer some basic
+questions about severe weather events in the United States between the years
+1950 and 2011. From the data, findings show that, across the U.S., the number
+of storm events has increased between 1950 and 2011, a strong correlation
+exists with proprety damages, and a weaker one exists with population health.
+It is censed 29 storm events that have the greatest economic consequences and
+38 that are the most harmful for population health, TORNADO being the top of the
+list.
+
+## 1. DATA LOADING
+From the "Storm Data" link, data is available in the form of a comma-separated-
+value (.csv) file compressed via the bzip2 algorithm to reduce its size. Data
+range from 1950 to 2011.
+```{r, echo=TRUE}
+## download url zip file
+fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+bz2fileName <- "./StormData.csv.bz2"
+download.file (fileUrl, bz2fileName, "curl")
+## keep track of date of the download
+dateDownloaded <- Sys.Date()
+```
+This file was last downloaded `r dateDownloaded`
+
+## 2. DATA PROCESSING
+### 2.1 Load R libraries
+Some of libraries used and required for this exploratory analysis.
+```{r,echo=TRUE}
+library(plyr); library(dplyr)
+library(reshape2); library(Hmisc); library(stringr)
+library(ggplot2)
+```
+
+### 2.2 Read file
+As a csv file but bz2-compressed, bzfile is required to access the file along
+with the call for read.csv.
+```{r, echo=TRUE}
+file <- read.csv(bzfile(bz2fileName, "r"), header = TRUE, sep = ",",
+                 na.string = "", strip.white = TRUE,
+                 blank.lines.skip = TRUE)
+```
+
+### 2.3 Data analysis
+After reading the file, we extract the columns of interest and proceed to an
+analysis of the dataset to get a sens of what it is going on.
+```{r, echo=TRUE}
+# columns of interest
+dataset <- file[,c(2,8,21,23:28)]; dim(dataset)
+# considering the dimension of the dataset,
+# let's transform BGN_DATE in a new variable 'decade' that groups date by decade
+dataset <- dataset %>%
+    mutate(date = as.POSIXct(BGN_DATE, format = "%m/%e/%Y %k:%M:%S"),
+           decade = cut(as.POSIXlt(date)$year,
+                        breaks = c(49,59,69,79,89,99,109,119),
+                        labels = c("1950","1960","1970","1980","1990",
+                                   "2000","2010")))
+```
+Statistics show that variables of interest have no NA values
+```{r,echo=TRUE}
+# FATALITIES, INJURIES, PROPDMG and CROPDMG
+summary(dataset)
+# this confirms there is no NA values for variable regarding population
+sum(is.na(dataset$FATALITIES)); sum(is.na(dataset$INJURIES))
+# this confirms there is no NA values for variable regarding infrastucture
+sum(is.na(dataset$PROPDMG)); sum(is.na(dataset$CROPDMG))
+```
+However, data show redundancy and inadequate classification in variables EVTYPE,
+PROPDMGEXP and CROPDMGEXP.
+```{r,echo=TRUE}
+# reshape data for analysis
+newdataset <- dataset
+newdataset$PROPDMGEXP <- toupper(newdataset$PROPDMGEXP)
+newdataset$CROPDMGEXP <- toupper(newdataset$CROPDMGEXP)
+nd_m <- melt(newdataset, id = c("decade", "EVTYPE", "PROPDMGEXP", "CROPDMGEXP"),
+             measure.vars = c("PROPDMG", "CROPDMG"))
+```
+Statistics on variable PROPDMGEXP show unconventional classification that we can
+disregard (their mean is low) and a non neglectible amount of NA values. As
+these NA values don't define a quantity as per Million, Billion, etc., the
+overall analysis is based on the relative ("as is") value of the cost.
+```{r,echo=TRUE}
+prop <- dcast(nd_m, EVTYPE ~ PROPDMGEXP, sum); summary(prop)
+```
+Same apply to the variable CROPDMGEXP
+```{r,echo=TRUE}
+crop <- dcast(nd_m, EVTYPE ~ CROPDMGEXP, sum); summary(crop)
+```
+
+## 3. RESULTS
+In this panel plot, we see in the 3 bottom-left-corner graphs the increase in
+the number of event through the period of reference, the existing relationship
+between "stromfreq" (frequence of event) and "infcost" (economic cost), the
+relationship between stormfreq and "humcost" (popultion health cost) as well.
+```{r, echo=TRUE, fig.height=8, fig.width=12}
+allhum <- summarise(group_by(dataset, decade), stormfreq = log(sum(EVTYPE)),
+                   humcost = log(sum(FATALITIES) + sum(INJURIES)))
+allinf <- summarise(group_by(dataset, decade), stormfreq = log(sum(EVTYPE)),
+                   infcost = log(sum(PROPDMG) + sum(CROPDMG)))
+par(mfcol=c(2,1))
+plot(allhum); plot(allinf)
+```
+
+### 3.1 Which types of events are most harmful with respect to population health?
+The following plot shows the 38 most harmful events for population health. The
+selection represents the values above the average cost of combined fatalities
+and injuries. Complementary code is also available for discretisation by category.
+```{r, echo=TRUE, fig.height=10, fig.width=18}
+## pop health status
+nd_hum_m <- melt(newdataset, id = c("decade", "EVTYPE"),
+             measure.vars = c("FATALITIES", "INJURIES"))
+humcost <- dcast(nd_hum_m, decade + EVTYPE ~ variable, sum, margins = "variable")
+summary(humcost)
+# ordering descending
+humcost_ord <- arrange(humcost, desc(humcost[,5]))
+# filtering values above mean
+humcost_most <- filter(humcost_ord, humcost_ord[,5] > mean(humcost_ord[,5]))
+g1 <- ggplot(humcost_most)
+g1 + geom_point(aes(x=EVTYPE, y=log(humcost_most[,5]))) +
+    facet_grid(decade ~.) +
+    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+    labs(title = "38 Most Harmful Storm Events For Population Health \n by decade from 1950") +
+    labs(x = "Storm event", y = expression("log[TotalCost]"))
+
+## fatalities
+# ordering descending
+#fata_ord <- arrange(humcost, desc(humcost[,3]))
+# filtering values above the mean
+#fata_most <- filter(fata_ord, fata_ord[,3] > mean(fata_ord[,3]))
+#g2 <- ggplot(fata_most)
+#g2 + geom_point(aes(x=EVTYPE, y=log(fata_most[,3]))) +
+#    facet_grid(decade ~.) +
+#    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+#    labs(title = "Storm Events Causing The Most Of Fatalities \n by decade from 1950") +
+#    labs(x = "Storm event", y = expression("log[TotalCost]"))
+
+## injuries
+# ordering descending
+#inju_ord <- arrange(humcost, desc(humcost[,4]))
+# filtering values above mean
+#inju_most <- filter(inju_ord, inju_ord[,4] > mean(inju_ord[,4]))
+#g3 <- ggplot(inju_most)
+#g3 + geom_point(aes(x=EVTYPE, y=log(inju_most[,4]))) +
+#    facet_grid(decade ~.) +
+#    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+#    labs(title = "Storm Events Causing The Most Of Injuries \n by decade from 1950") +
+#    labs(x = "Storm event", y = expression("log[TotalCost]"))
+```
+
+### 3.2 Which types of events have the greatest economic consequences?
+The following plot shows the 29 most damageable events for economy. The
+selection represents the values above the average cost of combined properties
+and crops. Complementary code is also available for discretisation by category.
+```{r, echo=TRUE, fig.height=10, fig.width=18}
+## infra status
+nd_inf_m <- melt(newdataset, id = c("decade", "EVTYPE", "PROPDMGEXP", "CROPDMGEXP"),
+             measure.vars = c("PROPDMG", "CROPDMG"))
+infcost <- dcast(nd_inf_m, decade + EVTYPE ~ variable, sum, margins = "variable")
+summary(infcost)
+# ordering descending
+infcost_ord <- arrange(infcost, desc(infcost[,5]))
+# filtering values above mean
+infcost_most <- filter(infcost_ord, infcost_ord[,5] > mean(infcost_ord[,5]))
+g4 <- ggplot(infcost_most)
+g4 + geom_point(aes(x=EVTYPE, y=log(infcost_most[,5]))) +
+    facet_grid(decade ~.) +
+    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+    labs(title = " 29 Most Damageable Storm Events On Economy \n by decade from 1950") +
+    labs(x = "Storm event", y = expression("log[TotalCost]"))
+
+## prop
+#prop <- dcast(nd_m, decade + EVTYPE ~ PROPDMGEXP, sum, margins = "PROPDMGEXP")
+#summary(prop)
+# ordering descending
+#prop_ord <- arrange(prop, desc(prop[,20]))
+# filtering values above mean
+#prop_most <- filter(prop_ord, prop_ord[,20] > mean(prop_ord[,20]))
+#g5 <- ggplot(prop_most)
+#g5 + geom_point(aes(x=EVTYPE, y=log(prop_most[,20]))) +
+#    facet_grid(decade ~.) +
+#    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+#    labs(title = "Storm Events Causing The Most Damage On Properties \n by decade from 1950") +
+#    labs(x = "Storm event", y = expression("log[TotalCost]"))
+
+## crop
+#crop <- dcast(nd_m, decade + EVTYPE ~ CROPDMGEXP, sum, margins = "CROPDMGEXP")
+#summary(crop)
+# ordering descending
+#crop_ord <- arrange(crop, desc(crop[,10]))
+# filtering values above mean
+#crop_most <- filter(crop_ord, crop_ord[,10] > mean(crop_ord[,10]))
+#g6 <- ggplot(crop_most)
+#g6 + geom_point(aes(x=EVTYPE, y=log(crop_most[,10]))) +
+#    facet_grid(decade ~.) +
+#    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) + 
+#    labs(title = "Storm Events Causing The Most Damage On Crops \n by decade from 1950") +
+#    labs(x = "Storm event", y = expression("log[TotalCost]"))
+```
